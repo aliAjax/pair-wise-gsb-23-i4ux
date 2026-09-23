@@ -1,158 +1,153 @@
+import { useMemo, useState } from "react";
 import "./styles.css";
+import { EntryForm } from "./components/EntryForm";
+import { ReviewQueue } from "./components/ReviewQueue";
+import { BoardTable } from "./components/BoardTable";
+import { CorrectionModal } from "./components/CorrectionModal";
+import {
+  CorrectionPedigreePanel,
+  DriftReviewPanel,
+  InspectionChainPanel,
+} from "./components/RelationPanels";
+import { INSTRUMENTS, ROOMS } from "./domain/config";
+import type { InspectionEntry } from "./domain/types";
+import {
+  selectCorrectionFamilies,
+  selectDriftReviews,
+  selectInspectionChains,
+  selectStats,
+} from "./state/selectors";
+import { useBoard } from "./state/useBoard";
 
-const project = {
-  "id": "hxwl-09",
-  "port": 5109,
-  "title": "半导体洁净室巡检",
-  "subtitle": "洁净等级阈值、粒子计数与异常处理看板",
-  "stack": "React + Vite + TypeScript + CSS",
-  "theme": [
-    "#0f766e",
-    "#2563eb",
-    "#e11d48"
-  ],
-  "domain": "洁净室巡检",
-  "users": [
-    "巡检员",
-    "厂务工程师",
-    "班组长"
-  ],
-  "metrics": [
-    "粒子异常",
-    "压差异常",
-    "温湿度偏移",
-    "待处理"
-  ],
-  "filters": [
-    "ISO 5",
-    "ISO 6",
-    "ISO 7",
-    "黄光区"
-  ],
-  "fields": [
-    "房间编号",
-    "洁净等级",
-    "粒子计数",
-    "温湿度",
-    "压差",
-    "设备状态",
-    "处理备注"
-  ],
-  "records": [
-    [
-      "CR-1201",
-      "ISO 5",
-      "异常",
-      "0.5um粒子超限，已通知厂务"
-    ],
-    [
-      "CR-2107",
-      "ISO 6",
-      "稳定",
-      "压差15Pa，温湿度正常"
-    ],
-    [
-      "Y-0302",
-      "黄光区",
-      "关注",
-      "湿度接近上限"
-    ]
-  ]
-};
-
-const statusColors = ["status-ok", "status-watch", "status-danger"];
-
-function MetricCard({ label, value, index }: { label: string; value: string; index: number }) {
-  return (
-    <article className="metric-card">
-      <span>{label}</span>
-      <strong>{value}</strong>
-      <i className={statusColors[index % statusColors.length]} />
-    </article>
-  );
-}
+const METRIC_CARDS = [
+  { key: "active", label: "生效巡检条目", tone: "ok" },
+  { key: "pending", label: "待漂移复核", tone: "warn" },
+  { key: "frozen", label: "复测通过已冻结", tone: "frozen" },
+  { key: "escalated", label: "复测未过升级", tone: "danger" },
+  { key: "correction", label: "更正版本数", tone: "muted" },
+] as const;
 
 function App() {
-  const values = project.metrics.map((metric: string, index: number) => {
-    const base = [84, 12, 31, 7][index % 4];
-    return String(base + index * 3);
-  });
+  const { state, registerEntry, submitRetest, createCorrection, resetDemo } = useBoard();
+  const [correcting, setCorrecting] = useState<InspectionEntry | null>(null);
+
+  const stats = useMemo(() => selectStats(state.entries), [state.entries]);
+  const chains = useMemo(() => selectInspectionChains(state.entries), [state.entries]);
+  const driftCases = useMemo(() => selectDriftReviews(state.entries), [state.entries]);
+  const families = useMemo(() => selectCorrectionFamilies(state.entries), [state.entries]);
+
+  const pending = useMemo(
+    () =>
+      state.entries
+        .filter((e) => e.status === "pending")
+        .sort((a, b) => a.ordinal - b.ordinal),
+    [state.entries],
+  );
+  const escalated = useMemo(
+    () =>
+      state.entries
+        .filter((e) => e.status === "escalated" && !e.supersededBy)
+        .sort((a, b) => b.ordinal - a.ordinal),
+    [state.entries],
+  );
+
+  const valueFor = (key: (typeof METRIC_CARDS)[number]["key"]) => {
+    if (key === "active") return stats.activeCount;
+    if (key === "pending") return stats.pendingCount;
+    if (key === "frozen") return stats.frozenCount;
+    if (key === "escalated") return stats.escalatedCount;
+    return stats.correctionCount;
+  };
 
   return (
     <main className="app-shell">
       <section className="hero">
         <div>
-          <p className="eyebrow">{project.id} · port {project.port}</p>
-          <h1>{project.title}</h1>
-          <p className="subtitle">{project.subtitle}</p>
+          <p className="eyebrow">hxwl-09 · port 5109 · 数据保存在本机浏览器</p>
+          <h1>半导体洁净室跨班互检与仪器漂移复核台</h1>
+          <p className="subtitle">
+            巡检员按房间与班次登记粒子计数、压差、温湿度及仪器编号，同房间同班只留一条；
+            相邻两班读数越过漂移阈值时停在待复核并保留原值，由下一班更换另一台合格仪器复测，
+            通过后冻结仪器与读数，任何更正另建带原因版本。
+          </p>
         </div>
         <div className="stack-card">
-          <span>技术栈</span>
-          <strong>{project.stack}</strong>
+          <span>分层结构</span>
+          <strong>
+            领域数据 · 判定逻辑 · 本地存储 · 页面视图
+          </strong>
+          <button className="reset-button" onClick={resetDemo}>
+            重置为演示数据
+          </button>
         </div>
       </section>
 
-      <section className="metrics-grid">
-        {project.metrics.map((metric: string, index: number) => (
-          <MetricCard key={metric} label={metric} value={values[index]} index={index} />
+      <section className="metrics-grid metrics-grid-5">
+        {METRIC_CARDS.map((card) => (
+          <article key={card.key} className={`metric-card tone-${card.tone}`}>
+            <span>{card.label}</span>
+            <strong>{valueFor(card.key)}</strong>
+            <i className={`bar bar-${card.tone}`} />
+          </article>
         ))}
       </section>
 
-      <section className="workspace">
-        <aside className="panel narrow">
-          <h2>角色</h2>
-          <div className="chips">
-            {project.users.map((user: string) => (
-              <span key={user}>{user}</span>
-            ))}
-          </div>
-          <h2>筛选</h2>
-          <div className="chips muted">
-            {project.filters.map((filter: string) => (
-              <button key={filter}>{filter}</button>
-            ))}
-          </div>
-        </aside>
+      <div className="workspace workspace-col">
+        <EntryForm onSubmit={registerEntry} />
+        <ReviewQueue
+          pending={pending}
+          escalated={escalated}
+          onRetest={submitRetest}
+          onCorrect={setCorrecting}
+        />
+        <BoardTable entries={state.entries} onCorrect={setCorrecting} />
+      </div>
 
-        <section className="panel">
-          <div className="section-heading">
-            <div>
-              <p>{project.domain}</p>
-              <h2>记录字段</h2>
-            </div>
-            <button className="primary-action">新增记录</button>
-          </div>
-          <div className="field-grid">
-            {project.fields.map((field: string) => (
-              <label key={field}>
-                <span>{field}</span>
-                <input placeholder={"填写" + field} />
-              </label>
-            ))}
-          </div>
-        </section>
-      </section>
+      <div className="workspace workspace-col">
+        <InspectionChainPanel chains={chains} />
+        <DriftReviewPanel cases={driftCases} />
+        <CorrectionPedigreePanel families={families} />
+      </div>
 
-      <section className="records panel">
+      <section className="panel ledger-panel">
         <div className="section-heading">
           <div>
-            <p>示例数据</p>
-            <h2>近期记录</h2>
+            <p>基础台账（领域数据）</p>
+            <h2>房间等级与仪器合格状态</h2>
           </div>
-          <button>导出摘要</button>
         </div>
-        <div className="record-list">
-          {project.records.map((record: string[], index: number) => (
-            <article key={record.join("-")} className="record-card">
-              <div className="record-index">{String(index + 1).padStart(2, "0")}</div>
-              <div>
-                <h3>{record[0]}</h3>
-                <p>{record.slice(1).join(" · ")}</p>
-              </div>
-            </article>
-          ))}
+        <div className="ledger-grid">
+          <div>
+            <h3>房间与粒子限值（≥0.5µm）</h3>
+            <ul className="plain-list">
+              {ROOMS.map((r) => (
+                <li key={r.id}>
+                  <b>{r.id}</b> {r.name} · {r.grade} · 限值 {r.particleLimit.toLocaleString()} 粒/m³
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div>
+            <h3>仪器台账</h3>
+            <ul className="plain-list">
+              {INSTRUMENTS.map((i) => (
+                <li key={i.id} className={i.qualified ? "" : "inst-disabled"}>
+                  <b>{i.id}</b> {i.model}
+                  {i.qualified ? " · 合格" : ` · ${i.note ?? "停用"}`}
+                </li>
+              ))}
+            </ul>
+          </div>
         </div>
       </section>
+
+      {correcting && (
+        <CorrectionModal
+          source={correcting}
+          onClose={() => setCorrecting(null)}
+          onSubmit={createCorrection}
+        />
+      )}
     </main>
   );
 }

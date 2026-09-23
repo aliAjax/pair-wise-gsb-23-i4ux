@@ -1,158 +1,127 @@
+import { useEffect, useMemo, useState } from "react";
 import "./styles.css";
-
-const project = {
-  "id": "hxwl-09",
-  "port": 5109,
-  "title": "半导体洁净室巡检",
-  "subtitle": "洁净等级阈值、粒子计数与异常处理看板",
-  "stack": "React + Vite + TypeScript + CSS",
-  "theme": [
-    "#0f766e",
-    "#2563eb",
-    "#e11d48"
-  ],
-  "domain": "洁净室巡检",
-  "users": [
-    "巡检员",
-    "厂务工程师",
-    "班组长"
-  ],
-  "metrics": [
-    "粒子异常",
-    "压差异常",
-    "温湿度偏移",
-    "待处理"
-  ],
-  "filters": [
-    "ISO 5",
-    "ISO 6",
-    "ISO 7",
-    "黄光区"
-  ],
-  "fields": [
-    "房间编号",
-    "洁净等级",
-    "粒子计数",
-    "温湿度",
-    "压差",
-    "设备状态",
-    "处理备注"
-  ],
-  "records": [
-    [
-      "CR-1201",
-      "ISO 5",
-      "异常",
-      "0.5um粒子超限，已通知厂务"
-    ],
-    [
-      "CR-2107",
-      "ISO 6",
-      "稳定",
-      "压差15Pa，温湿度正常"
-    ],
-    [
-      "Y-0302",
-      "黄光区",
-      "关注",
-      "湿度接近上限"
-    ]
-  ]
-};
-
-const statusColors = ["status-ok", "status-watch", "status-danger"];
-
-function MetricCard({ label, value, index }: { label: string; value: string; index: number }) {
-  return (
-    <article className="metric-card">
-      <span>{label}</span>
-      <strong>{value}</strong>
-      <i className={statusColors[index % statusColors.length]} />
-    </article>
-  );
-}
+import { AppState } from "./domain/types";
+import {
+  DRIFT_LIMITS,
+  OpResult,
+  registerRecord,
+  RegisterInput,
+  reviseRecord,
+  ReviseInput,
+  ReviewInput,
+  submitReview,
+} from "./domain/judgment";
+import { loadState, resetState, saveState } from "./storage/store";
+import { RegisterPanel } from "./ui/RegisterPanel";
+import { RecordBoard } from "./ui/RecordBoard";
 
 function App() {
-  const values = project.metrics.map((metric: string, index: number) => {
-    const base = [84, 12, 31, 7][index % 4];
-    return String(base + index * 3);
-  });
+  const [state, setState] = useState<AppState>(loadState);
+  const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+
+  useEffect(() => {
+    saveState(state);
+  }, [state]);
+
+  const apply = (r: OpResult) => {
+    if (r.ok) {
+      setState(r.state);
+      setToast({ kind: "ok", text: r.message });
+    } else {
+      setToast({ kind: "err", text: r.error });
+    }
+  };
+
+  const onRegister = (input: RegisterInput) => apply(registerRecord(state, input));
+  const onReview = (id: string, input: ReviewInput) => apply(submitReview(state, id, input));
+  const onRevise = (id: string, input: ReviseInput) => apply(reviseRecord(state, id, input));
+
+  const current = state.records.filter((r) => r.status !== "superseded");
+  const metrics = [
+    { label: "互检通过", value: current.filter((r) => r.status === "confirmed").length, cls: "status-ok" },
+    { label: "待复核", value: current.filter((r) => r.status === "pending-review").length, cls: "status-watch" },
+    { label: "已冻结", value: current.filter((r) => r.status === "frozen").length, cls: "status-frozen" },
+    { label: "修订版本", value: state.records.filter((r) => r.status === "superseded").length, cls: "status-revised" },
+  ];
+
+  const existingKeys = useMemo(
+    () => new Set(current.map((r) => `${r.roomId}|${r.shiftId}`)),
+    [state.records],
+  );
 
   return (
     <main className="app-shell">
       <section className="hero">
         <div>
-          <p className="eyebrow">{project.id} · port {project.port}</p>
-          <h1>{project.title}</h1>
-          <p className="subtitle">{project.subtitle}</p>
+          <p className="eyebrow">hxwl-09 · port 5109</p>
+          <h1>洁净室跨班互检与仪器漂移复核台</h1>
+          <p className="subtitle">
+            巡检员按房间和班次登记粒子计数、压差、温湿度与仪器编号；相邻两班读数越过漂移阈值即停在待复核并保留原值，
+            由下一班换另一台合格仪器复测，通过后冻结仪器与读数，更正另建带原因的修订版本。
+          </p>
         </div>
         <div className="stack-card">
-          <span>技术栈</span>
-          <strong>{project.stack}</strong>
+          <span>漂移阈值</span>
+          <strong>
+            粒子 ±{DRIFT_LIMITS.particlesRatio * 100}% · 压差 ±{DRIFT_LIMITS.pressure} Pa · 温度 ±
+            {DRIFT_LIMITS.temperature} ℃ · 湿度 ±{DRIFT_LIMITS.humidity} %RH
+          </strong>
+          <span>数据存于浏览器 localStorage，重开页面互检 / 复核 / 修订关系不丢失</span>
         </div>
       </section>
 
       <section className="metrics-grid">
-        {project.metrics.map((metric: string, index: number) => (
-          <MetricCard key={metric} label={metric} value={values[index]} index={index} />
+        {metrics.map((m) => (
+          <article key={m.label} className="metric-card">
+            <span>{m.label}</span>
+            <strong>{m.value}</strong>
+            <i className={m.cls} />
+          </article>
         ))}
       </section>
 
+      {toast && (
+        <p className={toast.kind === "ok" ? "toast toast-ok" : "toast toast-err"}>{toast.text}</p>
+      )}
+
       <section className="workspace">
+        <RegisterPanel instruments={state.instruments} existingKeys={existingKeys} onSubmit={onRegister} />
         <aside className="panel narrow">
-          <h2>角色</h2>
-          <div className="chips">
-            {project.users.map((user: string) => (
-              <span key={user}>{user}</span>
+          <h2>关系图例</h2>
+          <ul className="legend">
+            <li>
+              <span className="badge badge-confirmed">互检通过</span>
+              与上一班读数在阈值内
+            </li>
+            <li>
+              <span className="badge badge-pending-review">待复核</span>
+              相邻班越阈，原值保留，等下一班复测
+            </li>
+            <li>
+              <span className="badge badge-frozen">已冻结</span>
+              复测通过，仪器与读数锁定
+            </li>
+            <li>
+              <span className="badge badge-version">v2+</span>
+              修订链：更正另建版本并记录原因，原版本可溯
+            </li>
+          </ul>
+          <h2>仪器台账</h2>
+          <ul className="instrument-list">
+            {state.instruments.map((i) => (
+              <li key={i.id} className={i.qualified ? "" : "instrument-bad"}>
+                {i.name}
+                <span>{i.qualified ? `校准至 ${i.calibrationDue}` : `超期 ${i.calibrationDue}，禁用`}</span>
+              </li>
             ))}
-          </div>
-          <h2>筛选</h2>
-          <div className="chips muted">
-            {project.filters.map((filter: string) => (
-              <button key={filter}>{filter}</button>
-            ))}
-          </div>
+          </ul>
+          <button onClick={() => { setState(resetState()); setToast({ kind: "ok", text: "已恢复示例数据" }); }}>
+            恢复示例数据
+          </button>
         </aside>
-
-        <section className="panel">
-          <div className="section-heading">
-            <div>
-              <p>{project.domain}</p>
-              <h2>记录字段</h2>
-            </div>
-            <button className="primary-action">新增记录</button>
-          </div>
-          <div className="field-grid">
-            {project.fields.map((field: string) => (
-              <label key={field}>
-                <span>{field}</span>
-                <input placeholder={"填写" + field} />
-              </label>
-            ))}
-          </div>
-        </section>
       </section>
 
-      <section className="records panel">
-        <div className="section-heading">
-          <div>
-            <p>示例数据</p>
-            <h2>近期记录</h2>
-          </div>
-          <button>导出摘要</button>
-        </div>
-        <div className="record-list">
-          {project.records.map((record: string[], index: number) => (
-            <article key={record.join("-")} className="record-card">
-              <div className="record-index">{String(index + 1).padStart(2, "0")}</div>
-              <div>
-                <h3>{record[0]}</h3>
-                <p>{record.slice(1).join(" · ")}</p>
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
+      <RecordBoard state={state} onReview={onReview} onRevise={onRevise} />
     </main>
   );
 }
